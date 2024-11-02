@@ -1,10 +1,13 @@
 import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.widgets import Slider
 from matplotlib import use as mpl_use
 
 mpl_use("Agg")  # Use non-interactive backend for Streamlit compatibility
+
+# Initialize or retrieve supports list in session state
+if 'supports' not in st.session_state:
+    st.session_state.supports = []  # Store supports persistently
 
 class Beam:
     def __init__(self, young, inertia, length, segments):
@@ -15,7 +18,6 @@ class Beam:
         self.node = self.generate_nodes()
         self.bar = self.generate_bars()
         self.point_load = np.zeros((self.segments + 1, 2))
-        self.supports = []  # Store supports as a list of dictionaries
         self.force = np.zeros((self.segments, 4))
         self.displacement = np.zeros((self.segments, 4))
 
@@ -26,15 +28,9 @@ class Beam:
     def generate_bars(self):
         return np.array([[i, i + 1] for i in range(self.segments)])
 
-    def add_support(self, position, support_type):
-        if support_type == "Fixed":
-            self.supports.append({"position": position, "type": "Fixed"})
-        elif support_type == "Pinned":
-            self.supports.append({"position": position, "type": "Pinned"})
-
     def apply_supports(self):
         support_matrix = np.ones((self.segments + 1, 2)).astype(int)
-        for support in self.supports:
+        for support in st.session_state.supports:
             position = support["position"]
             if support["type"] == "Fixed":
                 support_matrix[position, :] = 0
@@ -136,7 +132,8 @@ add_support = st.sidebar.button("Add Support")
 beam = Beam(E, I, length, segments)
 
 if add_support:
-    beam.add_support(support_position, support_type)
+    # Add support to session state for persistence
+    st.session_state.supports.append({"position": support_position, "type": support_type})
     st.sidebar.write(f"{support_type} support added at position {support_position}")
 
 st.sidebar.header("Load Position")
@@ -144,10 +141,9 @@ load_position = st.sidebar.slider("Load Position", 0, segments, 0)
 
 # Display added supports
 st.sidebar.subheader("Current Supports")
-for support in beam.supports:
+for support in st.session_state.supports:
     st.sidebar.write(f"{support['type']} at position {support['position']}")
 
 st.subheader("Beam Analysis Results")
 fig = beam.plot(load_position)
 st.pyplot(fig)
-
