@@ -1,16 +1,14 @@
 import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.widgets import Slider
 
-# Define the Beam class as before
 class Beam:
     def __init__(self, young, inertia, length, segments):
         self.young = young
         self.inertia = inertia
         self.length = length
-        self.dof = 2
         self.segments = segments
+        self.dof = 2
         self.node = self.generate_nodes()
         self.bar = self.generate_bars()
         self.point_load = np.zeros_like(self.node)
@@ -77,63 +75,74 @@ class Beam:
             self.force[i] = np.dot(k[i], u_ele[i]) - eq_load_ele[i]
             self.displacement[i] = u_ele[i]
 
-    def plot(self, scale=None, ax=None):
-        ne = len(self.bar)
+    def plot(self, scale=100):
+        fig, axs = plt.subplots(3, figsize=(10, 10))
 
-        ax[0].cla()
-        ax[1].cla()
-        ax[2].cla()
-
-        # Original and deformed configurations
-        for i in range(ne):
+        # Plotting original and deformed beam shape
+        for i in range(len(self.bar)):
             xi, xf = self.node[self.bar[i, 0], 0], self.node[self.bar[i, 1], 0]
             yi, yf = self.node[self.bar[i, 0], 1], self.node[self.bar[i, 1], 1]
-            ax[0].plot([xi, xf], [yi, yf], 'b', linewidth=1)
+            axs[0].plot([xi, xf], [yi, yf], 'b', linewidth=1)
 
-        for i in range(ne):
-            dxi, dxf = self.node[self.bar[i, 0], 0], self.node[self.bar[i, 1], 0]
             dyi = self.node[self.bar[i, 0], 1] + self.displacement[i, 0] * scale
             dyf = self.node[self.bar[i, 1], 1] + self.displacement[i, 2] * scale
-            ax[0].plot([dxi, dxf], [dyi, dyf], 'r', linewidth=2)
+            axs[0].plot([xi, xf], [dyi, dyf], 'r', linewidth=2)
 
-        ax[0].set_title("Beam Deflection")
-        ax[1].set_title("BMD")
-        ax[2].set_title("SFD")
+        axs[0].set_title("Beam Deflection")
+        axs[0].grid()
 
-        plt.draw()
+        # Bending moment plot
+        for i in range(len(self.bar)):
+            mr_xi, mr_xf = self.node[self.bar[i, 0], 0], self.node[self.bar[i, 1], 0]
+            mr_yi = -self.force[i, 1]
+            mr_yf = self.force[i, 3]
+            axs[1].plot([mr_xi, mr_xi, mr_xf, mr_xf], [0, mr_yi, mr_yf, 0], 'r', linewidth=1)
+            axs[1].fill([mr_xi, mr_xi, mr_xf, mr_xf], [0, mr_yi, mr_yf, 0], 'c', alpha=0.3)
 
-# Streamlit setup
-st.title("Beam Analysis Tool")
+        axs[1].set_title("Bending Moment Diagram (BMD)")
+        axs[1].grid()
 
-# User inputs
-E = st.number_input("Young's Modulus (E)", min_value=1e3, value=2e12)
-I = st.number_input("Moment of Inertia (I)", min_value=1e-6, value=5e-4)
-length = st.number_input("Beam Length (m)", min_value=0.1, value=10.0)
-segments = st.number_input("Number of Segments", min_value=1, value=12, step=1)
+        # Shear force plot
+        for i in range(len(self.bar)):
+            fr_xi, fr_xf = self.node[self.bar[i, 0], 0], self.node[self.bar[i, 1], 0]
+            fr_yi = -self.force[i, 0]
+            fr_yf = self.force[i, 2]
+            axs[2].plot([fr_xi, fr_xi, fr_xf, fr_xf], [0, fr_yi, fr_yf, 0], 'r', linewidth=1)
+            axs[2].fill([fr_xi, fr_xi, fr_xf, fr_xf], [0, fr_yi, fr_yf, 0], 'c', alpha=0.3)
 
-# Adding supports
-support_data = []
-with st.expander("Add Supports"):
-    add_support = st.button("Add Support")
-    support_type = st.selectbox("Support Type", ["Fixed", "Pinned"])
-    position = st.slider("Position", 0, segments, 0)
-    if add_support:
-        support_data.append((position, support_type))
-    st.write("Current Supports:")
-    for pos, sup_type in support_data:
-        st.write(f"Position: {pos}, Type: {sup_type}")
+        axs[2].set_title("Shear Force Diagram (SFD)")
+        axs[2].grid()
 
-# Create and analyze beam on button click
-if st.button("Analyze Beam"):
-    beam = Beam(E, I, length, segments)
-    
-    for pos, sup_type in support_data:
-        if sup_type == "Fixed":
-            beam.support[pos, :] = 0
-        elif sup_type == "Pinned":
-            beam.support[pos, 0] = 0
+        plt.tight_layout()
+        return fig
 
+# Streamlit interface
+st.title("Beam Analysis App")
+
+# User input for beam properties
+E = st.number_input("Enter Young's Modulus (E)", value=2e12)
+I = st.number_input("Enter Moment of Inertia (I)", value=5e-4)
+length = st.number_input("Enter the length of the beam", value=10.0)
+segments = st.number_input("Enter the number of segments", min_value=1, value=12, step=1)
+
+beam = Beam(E, I, length, int(segments))
+
+# Add supports
+st.subheader("Add Supports")
+support_type = st.selectbox("Select Support Type", ("Fixed", "Pinned"))
+support_position = st.slider("Select Support Position", 0, segments, 0)
+add_support = st.button("Add Support")
+
+if add_support:
+    if support_type == "Fixed":
+        beam.support[support_position, :] = 0
+    elif support_type == "Pinned":
+        beam.support[support_position, 0] = 0
+    st.write(f"Added {support_type} support at position {support_position}")
+
+# Calculate and plot
+if st.button("Calculate and Plot"):
     beam.analysis()
-    fig, axs = plt.subplots(3, 1, figsize=(10, 8))
-    beam.plot(scale=100, ax=axs)
+    fig = beam.plot(scale=100)
     st.pyplot(fig)
+
