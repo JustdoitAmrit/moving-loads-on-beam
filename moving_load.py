@@ -1,6 +1,10 @@
 import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.widgets import Slider
+from matplotlib import use as mpl_use
+
+mpl_use("Agg")  # Use non-interactive backend for Streamlit compatibility
 
 class Beam:
     def __init__(self, young, inertia, length, segments):
@@ -8,14 +12,12 @@ class Beam:
         self.inertia = inertia
         self.length = length
         self.segments = segments
-        self.dof = 2
         self.node = self.generate_nodes()
         self.bar = self.generate_bars()
-        self.point_load = np.zeros_like(self.node)
-        self.distributed_load = np.zeros([len(self.bar), 2])
-        self.support = np.ones_like(self.node).astype(int)
-        self.force = np.zeros([len(self.bar), 2 * self.dof])
-        self.displacement = np.zeros([len(self.bar), 2 * self.dof])
+        self.point_load = np.zeros((self.segments + 1, 2))
+        self.support = np.ones((self.segments + 1, 2)).astype(int)
+        self.force = np.zeros((self.segments, 4))
+        self.displacement = np.zeros((self.segments, 4))
 
     def generate_nodes(self):
         node_positions = np.linspace(0, self.length, self.segments + 1)
@@ -27,40 +29,21 @@ class Beam:
     def analysis(self):
         nn = len(self.node)
         ne = len(self.bar)
-        n_dof = self.dof * nn
-
+        n_dof = 2 * nn
         d = self.node[self.bar[:, 1], :] - self.node[self.bar[:, 0], :]
         length = np.sqrt((d**2).sum(axis=1))
-
-        matrix = np.zeros([2 * self.dof, 2 * self.dof])
-        k = np.zeros([ne, 2 * self.dof, 2 * self.dof])
-        ss = np.zeros([n_dof, n_dof])
+        ss = np.zeros((n_dof, n_dof))
         for i in range(ne):
-            aux = self.dof * self.bar[i, :]
-            index = np.r_[aux[0]:aux[0] + self.dof, aux[1]:aux[1] + self.dof]
-            l: float = length[i]
-            matrix[0] = [12, 6*l, -12, 6*l]
-            matrix[1] = [6*l, 4*l**2, -6*l, 2*l**2]
-            matrix[2] = [-12, -6*l, 12, -6*l]
-            matrix[3] = [6*l, 2*l**2, -6*l, 4*l**2]
-            k[i] = self.young * self.inertia * matrix / l**3
-            ss[np.ix_(index, index)] += k[i]
-
-        eq_load_ele = np.zeros([len(self.bar), 2 * self.dof])
-        for i in range(ne):
-            l: float = length[i]
-            pi: float = self.distributed_load[i, 0]
-            pf: float = self.distributed_load[i, 1]
-            eq_load_ele[i, 0] = l * (21 * pi + 9 * pf) / 60
-            eq_load_ele[i, 1] = l * (l * (3 * pi + 2 * pf)) / 60
-            eq_load_ele[i, 2] = l * (pi * 9 + 21 * pf) / 60
-            eq_load_ele[i, 3] = l * (l * (-2 * pi - 3 * pf)) / 60
-
-        for i in range(ne):
-            self.point_load[self.bar[i, 0], 0] += eq_load_ele[i, 0]
-            self.point_load[self.bar[i, 0], 1] += eq_load_ele[i, 1]
-            self.point_load[self.bar[i, 1], 0] += eq_load_ele[i, 2]
-            self.point_load[self.bar[i, 1], 1] += eq_load_ele[i, 3]
+            l = length[i]
+            k = self.young * self.inertia / l**3 * np.array(
+                [[12, 6*l, -12, 6*l],
+                 [6*l, 4*l**2, -6*l, 2*l**2],
+                 [-12, -6*l, 12, -6*l],
+                 [6*l, 2*l**2, -6*l, 4*l**2]]
+            )
+            aux = 2 * self.bar[i, :]
+            index = np.r_[aux[0]:aux[0] + 2, aux[1]:aux[1] + 2]
+            ss[np.ix_(index, index)] += k
 
         free_dof = self.support.flatten().nonzero()[0]
         kff = ss[np.ix_(free_dof, free_dof)]
@@ -69,80 +52,83 @@ class Beam:
         uf = np.linalg.solve(kff, pf)
         u = self.support.astype(float).flatten()
         u[free_dof] = uf
-        u = u.reshape(nn, self.dof)
+        u = u.reshape(nn, 2)
         u_ele = np.concatenate((u[self.bar[:, 0]], u[self.bar[:, 1]]), axis=1)
         for i in range(ne):
-            self.force[i] = np.dot(k[i], u_ele[i]) - eq_load_ele[i]
+            self.force[i] = np.dot(k, u_ele[i])
             self.displacement[i] = u_ele[i]
 
-    def plot(self, scale=100):
-        fig, axs = plt.subplots(3, figsize=(10, 10))
+    def plot(self, load_position):
+        fig, axs = plt.subplots(3, figsize=(10, 8))
+        ne = len(self.bar)
+        self.point_load.fill(0)
+        self.point_load[load_position, 0] = -1e3
 
-        # Plotting original and deformed beam shape
-        for i in range(len(self.bar)):
+        # Run analysis with current load position
+        self.analysis()
+
+        for i in range(ne):
             xi, xf = self.node[self.bar[i, 0], 0], self.node[self.bar[i, 1], 0]
             yi, yf = self.node[self.bar[i, 0], 1], self.node[self.bar[i, 1], 1]
             axs[0].plot([xi, xf], [yi, yf], 'b', linewidth=1)
 
-            dyi = self.node[self.bar[i, 0], 1] + self.displacement[i, 0] * scale
-            dyf = self.node[self.bar[i, 1], 1] + self.displacement[i, 2] * scale
+            dyi = yi + self.displacement[i, 0] * 100
+            dyf = yf + self.displacement[i, 2] * 100
             axs[0].plot([xi, xf], [dyi, dyf], 'r', linewidth=2)
 
+            mr_yi, mr_yf = -self.force[i, 1], self.force[i, 3]
+            axs[1].plot([xi, xi, xf, xf], [0, mr_yi, mr_yf, 0], 'r', linewidth=1)
+            axs[1].fill([xi, xi, xf, xf], [0, mr_yi, mr_yf, 0], 'c', alpha=0.3)
+
+            fr_yi, fr_yf = -self.force[i, 0], self.force[i, 2]
+            axs[2].plot([xi, xi, xf, xf], [0, fr_yi, fr_yf, 0], 'r', linewidth=1)
+            axs[2].fill([xi, xi, xf, xf], [0, fr_yi, fr_yf, 0], 'c', alpha=0.3)
+
         axs[0].set_title("Beam Deflection")
+        axs[0].set_xlabel("Length (m)")
+        axs[0].set_ylabel("Deflection (m)")
         axs[0].grid()
 
-        # Bending moment plot
-        for i in range(len(self.bar)):
-            mr_xi, mr_xf = self.node[self.bar[i, 0], 0], self.node[self.bar[i, 1], 0]
-            mr_yi = -self.force[i, 1]
-            mr_yf = self.force[i, 3]
-            axs[1].plot([mr_xi, mr_xi, mr_xf, mr_xf], [0, mr_yi, mr_yf, 0], 'r', linewidth=1)
-            axs[1].fill([mr_xi, mr_xi, mr_xf, mr_xf], [0, mr_yi, mr_yf, 0], 'c', alpha=0.3)
-
         axs[1].set_title("Bending Moment Diagram (BMD)")
+        axs[1].set_xlabel("Length (m)")
+        axs[1].set_ylabel("Bending Moment (Nm)")
         axs[1].grid()
 
-        # Shear force plot
-        for i in range(len(self.bar)):
-            fr_xi, fr_xf = self.node[self.bar[i, 0], 0], self.node[self.bar[i, 1], 0]
-            fr_yi = -self.force[i, 0]
-            fr_yf = self.force[i, 2]
-            axs[2].plot([fr_xi, fr_xi, fr_xf, fr_xf], [0, fr_yi, fr_yf, 0], 'r', linewidth=1)
-            axs[2].fill([fr_xi, fr_xi, fr_xf, fr_xf], [0, fr_yi, fr_yf, 0], 'c', alpha=0.3)
-
         axs[2].set_title("Shear Force Diagram (SFD)")
+        axs[2].set_xlabel("Length (m)")
+        axs[2].set_ylabel("Shear Force (N)")
         axs[2].grid()
 
-        plt.tight_layout()
         return fig
 
-# Streamlit interface
+# Streamlit App Interface
 st.title("Beam Analysis App")
 
-# User input for beam properties
-E = st.number_input("Enter Young's Modulus (E)", value=2e12)
-I = st.number_input("Enter Moment of Inertia (I)", value=5e-4)
-length = st.number_input("Enter the length of the beam", value=10.0)
-segments = st.number_input("Enter the number of segments", min_value=1, value=12, step=1)
+st.sidebar.header("Beam Properties")
+E = st.sidebar.number_input("Young's Modulus (E)", min_value=1e7, value=2e11, format="%.2e")
+I = st.sidebar.number_input("Moment of Inertia (I)", min_value=1e-10, value=5e-4, format="%.2e")
+length = st.sidebar.number_input("Beam Length (m)", min_value=1.0, value=10.0)
+segments = st.sidebar.number_input("Number of Segments", min_value=1, value=12)
 
-beam = Beam(E, I, length, int(segments))
+st.sidebar.header("Support Conditions")
+support_type = st.sidebar.selectbox("Select Support Type", ["Fixed", "Pinned"])
+support_position = st.sidebar.slider("Support Position", 0, segments, 0)
+add_support = st.sidebar.button("Add Support")
 
-# Add supports
-st.subheader("Add Supports")
-support_type = st.selectbox("Select Support Type", ("Fixed", "Pinned"))
-support_position = st.slider("Select Support Position", 0, segments, 0)
-add_support = st.button("Add Support")
+# Initialize beam instance
+beam = Beam(E, I, length, segments)
 
 if add_support:
     if support_type == "Fixed":
         beam.support[support_position, :] = 0
     elif support_type == "Pinned":
         beam.support[support_position, 0] = 0
-    st.write(f"Added {support_type} support at position {support_position}")
+    st.sidebar.write(f"{support_type} support added at position {support_position}")
 
-# Calculate and plot
-if st.button("Calculate and Plot"):
-    beam.analysis()
-    fig = beam.plot(scale=100)
-    st.pyplot(fig)
+st.sidebar.header("Load Position")
+load_position = st.sidebar.slider("Load Position", 0, segments, 0)
+
+st.subheader("Beam Analysis Results")
+fig = beam.plot(load_position)
+st.pyplot(fig)
 
