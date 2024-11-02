@@ -15,7 +15,7 @@ class Beam:
         self.node = self.generate_nodes()
         self.bar = self.generate_bars()
         self.point_load = np.zeros((self.segments + 1, 2))
-        self.support = np.ones((self.segments + 1, 2)).astype(int)
+        self.supports = []  # Store supports as a list of dictionaries
         self.force = np.zeros((self.segments, 4))
         self.displacement = np.zeros((self.segments, 4))
 
@@ -26,7 +26,24 @@ class Beam:
     def generate_bars(self):
         return np.array([[i, i + 1] for i in range(self.segments)])
 
+    def add_support(self, position, support_type):
+        if support_type == "Fixed":
+            self.supports.append({"position": position, "type": "Fixed"})
+        elif support_type == "Pinned":
+            self.supports.append({"position": position, "type": "Pinned"})
+
+    def apply_supports(self):
+        support_matrix = np.ones((self.segments + 1, 2)).astype(int)
+        for support in self.supports:
+            position = support["position"]
+            if support["type"] == "Fixed":
+                support_matrix[position, :] = 0
+            elif support["type"] == "Pinned":
+                support_matrix[position, 0] = 0
+        return support_matrix
+
     def analysis(self):
+        self.support = self.apply_supports()  # Use the applied supports
         nn = len(self.node)
         ne = len(self.bar)
         n_dof = 2 * nn
@@ -119,14 +136,16 @@ add_support = st.sidebar.button("Add Support")
 beam = Beam(E, I, length, segments)
 
 if add_support:
-    if support_type == "Fixed":
-        beam.support[support_position, :] = 0
-    elif support_type == "Pinned":
-        beam.support[support_position, 0] = 0
+    beam.add_support(support_position, support_type)
     st.sidebar.write(f"{support_type} support added at position {support_position}")
 
 st.sidebar.header("Load Position")
 load_position = st.sidebar.slider("Load Position", 0, segments, 0)
+
+# Display added supports
+st.sidebar.subheader("Current Supports")
+for support in beam.supports:
+    st.sidebar.write(f"{support['type']} at position {support['position']}")
 
 st.subheader("Beam Analysis Results")
 fig = beam.plot(load_position)
